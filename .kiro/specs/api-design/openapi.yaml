@@ -1,0 +1,1815 @@
+openapi: 3.0.3
+info:
+  title: VirtualQ API
+  version: 1.0.0
+  description: |
+    Multi-tenant virtual queue management system REST API.
+    
+    ## Features
+    - Multi-tenant architecture with data isolation
+    - Metadata-driven ticket types with configurable state machines
+    - Real-time state transitions with validation
+    - Flexible composition (tickets contain items with independent states)
+    - Workflow chaining (tickets can reference other tickets)
+    
+  contact:
+    name: VirtualQ API Support
+    email: api-support@virtualqueue.example.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.virtualqueue.example.com/v1
+    description: Production server
+  - url: https://staging-api.virtualqueue.example.com/v1
+    description: Staging server
+  - url: http://localhost:8080/v1
+    description: Local development server
+
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+
+tags:
+  - name: Accounts
+    description: Top-level billing entities
+  - name: Tenants
+    description: Business locations or units
+  - name: TypeDefinitions
+    description: Metadata for ticket types and state machines
+  - name: Queues
+    description: Virtual waiting lines
+  - name: Employees
+    description: Staff members who fulfill tickets
+  - name: Customers
+    description: End users who create tickets
+  - name: Tickets
+    description: Queue entries (orders, service requests)
+  - name: TicketItems
+    description: Individual components within tickets
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token for user authentication
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for service-to-service authentication
+
+  parameters:
+    TenantIdHeader:
+      name: X-Tenant-ID
+      in: header
+      description: Tenant context for multi-tenant operations
+      required: false
+      schema:
+        type: integer
+        format: int64
+    TenantIdQuery:
+      name: tenant_id
+      in: query
+      description: Tenant context for multi-tenant operations
+      required: false
+      schema:
+        type: integer
+        format: int64
+    PageParam:
+      name: page
+      in: query
+      description: Page number for pagination
+      schema:
+        type: integer
+        default: 1
+        minimum: 1
+    LimitParam:
+      name: limit
+      in: query
+      description: Number of items per page
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+  schemas:
+    # Core Domain Models
+    Account:
+      type: object
+      required:
+        - id
+        - extid
+        - name
+        - is_active
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Internal database ID
+        extid:
+          type: string
+          format: uuid
+          description: External UUID v7 identifier
+        name:
+          type: string
+          maxLength: 255
+        billing_email:
+          type: string
+          format: email
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Tenant:
+      type: object
+      required:
+        - id
+        - extid
+        - account_id
+        - name
+        - is_active
+      properties:
+        id:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        account_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          maxLength: 255
+        location_name:
+          type: string
+          maxLength: 255
+        location_address:
+          type: string
+        location_coordinates:
+          type: object
+          properties:
+            latitude:
+              type: number
+              format: double
+            longitude:
+              type: number
+              format: double
+        config:
+          type: object
+          description: Tenant-specific configuration (JSONB)
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TypeDefinition:
+      type: object
+      required:
+        - id
+        - extid
+        - type_code
+        - type_name
+        - fsm_schema
+      properties:
+        id:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        tenant_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: Null for system-wide types
+        type_code:
+          type: string
+          maxLength: 50
+          description: Unique code identifier
+        type_name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        doc:
+          type: string
+          description: Markdown documentation
+        custom_fields_schema:
+          type: object
+          description: JSON Schema for custom_data validation
+        fsm_schema:
+          type: object
+          description: State machine definition (jakesgordon format)
+          required:
+            - init
+            - states
+            - transitions
+          properties:
+            init:
+              type: string
+            states:
+              type: array
+              items:
+                type: string
+            transitions:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  from:
+                    type: string
+                  to:
+                    type: string
+        item_definition_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Queue:
+      type: object
+      required:
+        - id
+        - extid
+        - tenant_id
+        - name
+        - is_active
+      properties:
+        id:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        tenant_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        allowed_type_definition_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        wait_estimation_method:
+          type: string
+          enum: [average_recent_3, average_recent_5, custom]
+        show_wait_time:
+          type: boolean
+          default: true
+        max_wait_minutes:
+          type: integer
+          nullable: true
+        display_order:
+          type: integer
+          default: 0
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Employee:
+      type: object
+      required:
+        - id
+        - extid
+        - tenant_id
+        - fname
+        - lname
+      properties:
+        id:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        tenant_id:
+          type: integer
+          format: int64
+        fname:
+          type: string
+          maxLength: 100
+        lname:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          maxLength: 50
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Customer:
+      type: object
+      required:
+        - uid
+        - extid
+        - fname
+        - lname
+      properties:
+        uid:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        fname:
+          type: string
+          maxLength: 100
+        lname:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          maxLength: 20
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Ticket:
+      type: object
+      required:
+        - id
+        - extid
+        - queue_id
+        - type_definition_id
+        - current_state
+      properties:
+        id:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        queue_id:
+          type: integer
+          format: int64
+        type_definition_id:
+          type: integer
+          format: int64
+        customer_id:
+          type: integer
+          format: int64
+          nullable: true
+        employee_id:
+          type: integer
+          format: int64
+          nullable: true
+        references_ticket_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: For workflow chaining
+        current_state:
+          type: string
+          maxLength: 50
+        custom_data:
+          type: object
+          description: Validated against TypeDefinition.custom_fields_schema
+        estimated_wait_minutes:
+          type: integer
+          nullable: true
+        position_in_queue:
+          type: integer
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TicketItem:
+      type: object
+      required:
+        - id
+        - extid
+        - ticket_id
+        - item_type_definition_id
+        - current_state
+      properties:
+        id:
+          type: integer
+          format: int64
+        extid:
+          type: string
+          format: uuid
+        ticket_id:
+          type: integer
+          format: int64
+        item_type_definition_id:
+          type: integer
+          format: int64
+        external_item_id:
+          type: string
+          format: uuid
+          nullable: true
+        external_item_name:
+          type: string
+          maxLength: 255
+        quantity:
+          type: integer
+          default: 1
+        unit_price:
+          type: number
+          format: decimal
+          nullable: true
+        current_state:
+          type: string
+          maxLength: 50
+        custom_data:
+          type: object
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # Request/Response Models
+    CreateAccountRequest:
+      type: object
+      required:
+        - name
+        - billing_email
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        billing_email:
+          type: string
+          format: email
+
+    CreateTenantRequest:
+      type: object
+      required:
+        - account_id
+        - name
+      properties:
+        account_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          maxLength: 255
+        location_name:
+          type: string
+          maxLength: 255
+        location_address:
+          type: string
+        location_coordinates:
+          type: object
+          properties:
+            latitude:
+              type: number
+            longitude:
+              type: number
+        config:
+          type: object
+
+    CreateTypeDefinitionRequest:
+      type: object
+      required:
+        - type_code
+        - type_name
+        - fsm_schema
+      properties:
+        tenant_id:
+          type: integer
+          format: int64
+          nullable: true
+        type_code:
+          type: string
+          maxLength: 50
+        type_name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        doc:
+          type: string
+        custom_fields_schema:
+          type: object
+        fsm_schema:
+          type: object
+        item_definition_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+
+    CreateQueueRequest:
+      type: object
+      required:
+        - tenant_id
+        - name
+      properties:
+        tenant_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        allowed_type_definition_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        wait_estimation_method:
+          type: string
+          enum: [average_recent_3, average_recent_5, custom]
+        show_wait_time:
+          type: boolean
+        max_wait_minutes:
+          type: integer
+        display_order:
+          type: integer
+
+    CreateEmployeeRequest:
+      type: object
+      required:
+        - tenant_id
+        - fname
+        - lname
+      properties:
+        tenant_id:
+          type: integer
+          format: int64
+        fname:
+          type: string
+          maxLength: 100
+        lname:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          maxLength: 50
+
+    CreateCustomerRequest:
+      type: object
+      required:
+        - fname
+        - lname
+      properties:
+        fname:
+          type: string
+          maxLength: 100
+        lname:
+          type: string
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          maxLength: 20
+
+    CreateTicketRequest:
+      type: object
+      required:
+        - queue_id
+        - type_definition_id
+      properties:
+        queue_id:
+          type: integer
+          format: int64
+        type_definition_id:
+          type: integer
+          format: int64
+        customer_id:
+          type: integer
+          format: int64
+        references_ticket_id:
+          type: integer
+          format: int64
+        custom_data:
+          type: object
+        estimated_wait_minutes:
+          type: integer
+
+    TicketTransitionRequest:
+      type: object
+      required:
+        - transition
+      properties:
+        transition:
+          type: string
+          description: Transition name from fsm_schema
+        employee_id:
+          type: integer
+          format: int64
+
+    TicketAssignRequest:
+      type: object
+      required:
+        - employee_id
+      properties:
+        employee_id:
+          type: integer
+          format: int64
+
+    TicketForwardRequest:
+      type: object
+      required:
+        - target_queue_id
+      properties:
+        target_queue_id:
+          type: integer
+          format: int64
+        reason:
+          type: string
+
+    CreateTicketItemRequest:
+      type: object
+      required:
+        - item_type_definition_id
+      properties:
+        item_type_definition_id:
+          type: integer
+          format: int64
+        external_item_id:
+          type: string
+          format: uuid
+        external_item_name:
+          type: string
+          maxLength: 255
+        quantity:
+          type: integer
+          default: 1
+        unit_price:
+          type: number
+          format: decimal
+        custom_data:
+          type: object
+
+    ItemTransitionRequest:
+      type: object
+      required:
+        - transition
+      properties:
+        transition:
+          type: string
+
+    TicketCountRequest:
+      type: object
+      properties:
+        queue_id:
+          type: integer
+          format: int64
+        current_state:
+          type: string
+        tenant_id:
+          type: integer
+          format: int64
+
+    TicketCountResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+
+    PaginatedResponse:
+      type: object
+      properties:
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            total_pages:
+              type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error type code
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          description: Additional error context
+
+  responses:
+    BadRequest:
+      description: Invalid request or validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: validation_error
+            message: Invalid state transition
+            details:
+              current_state: received
+              valid_transitions: [start_preparation, cancel]
+    
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: unauthorized
+            message: Authentication token required
+    
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: forbidden
+            message: Insufficient permissions to access this tenant
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: not_found
+            message: Ticket with id 9999 not found
+
+paths:
+  # Accounts API
+  /accounts:
+    get:
+      tags:
+        - Accounts
+      summary: List all accounts
+      description: Get all accounts accessible to the authenticated user
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Account'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    
+    post:
+      tags:
+        - Accounts
+      summary: Create a new account
+      description: Create a new account (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /accounts/{id}:
+    get:
+      tags:
+        - Accounts
+      summary: Get account details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Tenants API
+  /tenants:
+    get:
+      tags:
+        - Tenants
+      summary: List all tenants
+      parameters:
+        - name: account_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Tenant'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+    
+    post:
+      tags:
+        - Tenants
+      summary: Create a new tenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+      responses:
+        '201':
+          description: Tenant created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /tenants/{id}:
+    get:
+      tags:
+        - Tenants
+      summary: Get tenant details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    put:
+      tags:
+        - Tenants
+      summary: Update tenant details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+      responses:
+        '200':
+          description: Tenant updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # TypeDefinitions API
+  /type-definitions:
+    get:
+      tags:
+        - TypeDefinitions
+      summary: List all type definitions
+      parameters:
+        - $ref: '#/components/parameters/TenantIdQuery'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/TypeDefinition'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+    
+    post:
+      tags:
+        - TypeDefinitions
+      summary: Create a new ticket type definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTypeDefinitionRequest'
+            example:
+              tenant_id: 456
+              type_code: food_order
+              type_name: Food Order
+              description: Customer food and beverage order
+              fsm_schema:
+                init: received
+                states: [received, in_progress, ready, picked_up, cancelled]
+                transitions:
+                  - name: start_preparation
+                    from: received
+                    to: in_progress
+                  - name: mark_ready
+                    from: in_progress
+                    to: ready
+                  - name: pickup
+                    from: ready
+                    to: picked_up
+      responses:
+        '201':
+          description: Type definition created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeDefinition'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /type-definitions/{id}:
+    get:
+      tags:
+        - TypeDefinitions
+      summary: Get type definition details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeDefinition'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Queues API
+  /queues:
+    get:
+      tags:
+        - Queues
+      summary: List all queues
+      parameters:
+        - $ref: '#/components/parameters/TenantIdQuery'
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Queue'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+    
+    post:
+      tags:
+        - Queues
+      summary: Create a new queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQueueRequest'
+      responses:
+        '201':
+          description: Queue created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /queues/{id}:
+    get:
+      tags:
+        - Queues
+      summary: Get queue details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /queues/{id}/enable:
+    post:
+      tags:
+        - Queues
+      summary: Enable a disabled queue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Queue enabled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+
+  /queues/{id}/disable:
+    post:
+      tags:
+        - Queues
+      summary: Disable a queue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Queue disabled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+
+  # Employees API
+  /employees:
+    get:
+      tags:
+        - Employees
+      summary: List all employees
+      parameters:
+        - $ref: '#/components/parameters/TenantIdQuery'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Employee'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+    
+    post:
+      tags:
+        - Employees
+      summary: Create a new employee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEmployeeRequest'
+      responses:
+        '201':
+          description: Employee created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Employee'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /employees/{id}:
+    get:
+      tags:
+        - Employees
+      summary: Get employee details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Employee'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Customers API
+  /customers:
+    get:
+      tags:
+        - Customers
+      summary: List all customers
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Customer'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+    
+    post:
+      tags:
+        - Customers
+      summary: Create a new customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '201':
+          description: Customer created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /customers/{id}:
+    get:
+      tags:
+        - Customers
+      summary: Get customer details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Tickets API
+  /tickets:
+    get:
+      tags:
+        - Tickets
+      summary: Search and list tickets
+      description: Get tickets with optional filtering
+      parameters:
+        - $ref: '#/components/parameters/TenantIdQuery'
+        - name: queue_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: current_state
+          in: query
+          schema:
+            type: string
+        - name: customer_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: employee_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Ticket'
+                  - $ref: '#/components/schemas/PaginatedResponse'
+    
+    post:
+      tags:
+        - Tickets
+      summary: Create a new ticket
+      description: Add a new ticket to a queue
+      parameters:
+        - $ref: '#/components/parameters/TenantIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTicketRequest'
+            example:
+              queue_id: 201
+              type_definition_id: 101
+              customer_id: 501
+              custom_data:
+                order_type: mobile
+                total_amount: 15.50
+                special_instructions: Extra hot
+              estimated_wait_minutes: 10
+      responses:
+        '201':
+          description: Ticket created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /tickets/count:
+    post:
+      tags:
+        - Tickets
+      summary: Count tickets matching criteria
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketCountRequest'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketCountResponse'
+
+  /tickets/{id}:
+    get:
+      tags:
+        - Tickets
+      summary: Get ticket details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/TenantIdHeader'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    put:
+      tags:
+        - Tickets
+      summary: Update ticket data
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                custom_data:
+                  type: object
+                estimated_wait_minutes:
+                  type: integer
+      responses:
+        '200':
+          description: Ticket updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    delete:
+      tags:
+        - Tickets
+      summary: Remove ticket from queue
+      description: Cancel/delete a ticket
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Ticket deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tickets/{id}/transition:
+    post:
+      tags:
+        - Tickets
+      summary: Trigger state transition
+      description: Move ticket to a new state (validated against fsm_schema)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketTransitionRequest'
+            example:
+              transition: start_preparation
+              employee_id: 301
+      responses:
+        '200':
+          description: State transition successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: State transition conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tickets/{id}/assign:
+    post:
+      tags:
+        - Tickets
+      summary: Assign ticket to employee
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketAssignRequest'
+      responses:
+        '200':
+          description: Ticket assigned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tickets/{id}/unassign:
+    post:
+      tags:
+        - Tickets
+      summary: Remove employee assignment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Employee unassigned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+
+  /tickets/{id}/forward:
+    post:
+      tags:
+        - Tickets
+      summary: Forward ticket to another queue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketForwardRequest'
+      responses:
+        '200':
+          description: Ticket forwarded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /tickets/{id}/history:
+    get:
+      tags:
+        - Tickets
+      summary: Get state transition history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket_id:
+                    type: integer
+                    format: int64
+                  history:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        from_state:
+                          type: string
+                        to_state:
+                          type: string
+                        transition_name:
+                          type: string
+                        employee_id:
+                          type: integer
+                          format: int64
+                        transitioned_at:
+                          type: string
+                          format: date-time
+
+  # TicketItems API
+  /tickets/{ticketId}/items:
+    get:
+      tags:
+        - TicketItems
+      summary: List all items in a ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket_id:
+                    type: integer
+                    format: int64
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TicketItem'
+    
+    post:
+      tags:
+        - TicketItems
+      summary: Add a new item to a ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTicketItemRequest'
+            example:
+              item_type_definition_id: 789
+              external_item_id: menu-item-uuid-123
+              external_item_name: Venti Latte
+              quantity: 1
+              unit_price: 5.25
+              custom_data:
+                customizations: [extra hot, oat milk]
+      responses:
+        '201':
+          description: Item added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /items/{id}:
+    get:
+      tags:
+        - TicketItems
+      summary: Get item details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketItem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    put:
+      tags:
+        - TicketItems
+      summary: Update item details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quantity:
+                  type: integer
+                custom_data:
+                  type: object
+      responses:
+        '200':
+          description: Item updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketItem'
+    
+    delete:
+      tags:
+        - TicketItems
+      summary: Remove item from ticket
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Item deleted successfully
+
+  /items/{id}/transition:
+    post:
+      tags:
+        - TicketItems
+      summary: Trigger item state transition
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemTransitionRequest'
+            example:
+              transition: start_item
+      responses:
+        '200':
+          description: State transition successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
