@@ -15,7 +15,7 @@ func main() {
 // Connects to Neon postgresql database to make sure it can connect.
 func testPostgresConnection() {
 
-	connStr := "postgresql://neondb_owner:npg_D7g2KtYkwRoZ@ep-crimson-star-ahtrlu3u-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+	connStr := todo
 
 	// Create connection pool
 	pool, err := pgxpool.New(context.Background(), connStr)
